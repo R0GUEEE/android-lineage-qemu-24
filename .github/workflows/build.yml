@@ -147,8 +147,8 @@ jobs:
           echo "::group::artifacts in $ARTIFACTS_DIR"
           ls -la "$ARTIFACTS_DIR" || true
           echo "::endgroup::"
-          # Expected release assets (globs allowed, one per line).
-          # Expected release assets, one glob per line, de-indented there (no YAML mangling).
+          # Expected release assets: one glob per line (printf, not a heredoc,
+          # so YAML block-scalar de-indentation cannot corrupt the patterns).
           printf '%s\n' \
             'UTM-VM-lineage-24*.zip' \
             'lineage_virtio_arm64only-ota.zip' \

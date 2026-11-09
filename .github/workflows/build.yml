@@ -1,13 +1,51 @@
 name: Build
 
+# LineageOS 24.0 (Android 17) arm64-only QEMU/UTM VM image.
+#
+# Fork of jqssun/android-lineage-qemu retargeted at lineage-24.0 and cut down to
+# a single target (virtio_arm64only, user + userdebug) to roughly halve CI time.
+#
+# Runner notes (READ BEFORE DISPATCHING):
+#   * Upstream's default is `self-hosted` -- not by accident. A full AOSP repo
+#     sync + arm64 build needs ~150-250 GB of disk. The standard ubuntu-latest
+#     GitHub-hosted runner is 4 vCPU / 16 GB RAM / 14 GB SSD and CANNOT do this.
+#   * Viable runners: self-hosted (upstream: ~3 h 07 min wall clock for BOTH
+#     x86_64 + arm64) OR a GitHub-hosted *larger* runner, e.g.
+#     `ubuntu-latest-32-cores-...` / a runner group with 'ubuntu-latest' label +
+#     >= 100 GB storage (larger runners on private repos are billed).
+#   * The 'Runner resources' step prints free disk and fails early (< 100 GB)
+#     unless `allow_small_runner` is set, so a bad runner choice costs seconds.
+
 on:
   workflow_dispatch:
     inputs:
       runner:
-        description: "Runner"
+        description: "Runner label (ubuntu-latest is NOT viable without >=100 GB disk)"
         required: true
         type: string
-        default: "self-hosted" # ubuntu-latest
+        default: "self-hosted" # use a larger/self-hosted runner; ubuntu-latest only with allow_small_runner
+      sync_jobs:
+        description: "repo sync parallelism (-j)"
+        required: false
+        type: string
+        default: "8"
+      lineage_branch:
+        description: "LineageOS manifest branch"
+        required: false
+        type: string
+        default: "lineage-24.0"
+      build_types:
+        description: "Build types (space separated, arm64only only)"
+        required: false
+        type: string
+        default: "userdebug user"
+      allow_small_runner:
+        description: "Proceed even if the runner has < 100 GB free (build will likely fail)"
+        required: false
+        type: boolean
+        default: false
+  # Monthly-ish canary against upstream's release cadence; harmless because the
+  # check job only builds when version.mk changed. Disable if undesired.
   schedule:
     - cron: "0 0 */16 * *"
 
@@ -15,6 +53,10 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check:
@@ -35,20 +77,114 @@ jobs:
   build:
     needs: check
     if: needs.check.outputs.build == 'true'
+    # workflow_dispatch: use the `runner` input; schedule: self-hosted (upstream default).
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
+    timeout-minutes: 480
     steps:
       - uses: actions/checkout@v7
 
       - name: Set ENV
         run: |
-          chmod +x *.sh
-          echo "VERSION=$(date '+%Y.%m.%d')" >> $GITHUB_ENV
+          chmod +x ./*.sh
+          echo "VERSION=$(date '+%Y.%m.%d')" >> "$GITHUB_ENV"
+          echo "ARTIFACTS_DIR=$GITHUB_WORKSPACE/artifacts" >> "$GITHUB_ENV"
 
-      - name: Build
+      - name: Runner resources
+        env:
+          ALLOW_SMALL_RUNNER: ${{ inputs.allow_small_runner }}
+        run: |
+          set -euo pipefail
+          echo "::group::resources"
+          nproc; free -h || true; df -h "$GITHUB_WORKSPACE" || true
+          echo "::endgroup::"
+          AVAIL_GB=$(( $(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
+          echo "Free disk on workspace: ${AVAIL_GB} GB"
+          # AOSP checkout (~90 GB) + out/ (~60-100 GB) + ccache. Be conservative.
+          if [ "$AVAIL_GB" -lt 100 ] && [ "${ALLOW_SMALL_RUNNER:-false}" != "true" ]; then
+            echo "::error::Runner has only ${AVAIL_GB} GB free; a LineageOS arm64 build needs >= 100 GB."
+            echo "::error::runs-on='${{ inputs.runner }}' is not viable (ubuntu-latest = 4 vCPU/16 GB RAM/14 GB SSD)."
+            echo "::error::Dispatch with a self-hosted or larger GitHub-hosted runner, or set allow_small_runner=true to force."
+            exit 1
+          fi
+          # Reclaim the preinstalled toolchains larger runners don't need.
+          if [ "$(id -u)" -eq 0 ]; then
+            rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android/sdk/ndk \
+                   /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+            df -h "$GITHUB_WORKSPACE" || true
+          elif command -v sudo >/dev/null 2>&1; then
+            sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android/sdk/ndk \
+                   /usr/local/share/boost "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+            df -h "$GITHUB_WORKSPACE" || true
+          fi
+
+      - name: Build (lineage-24.0, virtio_arm64only)
         env:
           DEBIAN_FRONTEND: noninteractive
+          LINEAGE_BRANCH: ${{ inputs.lineage_branch || 'lineage-24.0' }}
+          SYNC_JOBS: ${{ inputs.sync_jobs || '8' }}
+          BUILD_TYPES: ${{ inputs.build_types || 'userdebug user' }}
+          DEVICE: virtio_arm64only
         run: |
+          set -euo pipefail
           ./build.sh
+
+      - name: Artifacts list
+        id: artifacts
+        run: |
+          set -euo pipefail
+          echo "::group::artifacts in $ARTIFACTS_DIR"
+          ls -la "$ARTIFACTS_DIR" || true
+          echo "::endgroup::"
+          # Expected release assets (globs allowed, one per line).
+          # Expected release assets, one glob per line, de-indented there (no YAML mangling).
+          printf '%s\n' \
+            'UTM-VM-lineage-24*.zip' \
+            'lineage_virtio_arm64only-ota.zip' \
+            'boot_arm64only.img' \
+            'vendor_boot_arm64only.img' \
+            'recovery_arm64only-userdebug.img' \
+            'recovery_arm64only.img' \
+            'EFI.img' > "$RUNNER_TEMP/release-globs.txt"
+          # Resolve globs against $ARTIFACTS_DIR -> concrete file paths, keep only existing.
+          : > "$RUNNER_TEMP/release-files.txt"
+          while read -r pattern; do
+            [ -n "$pattern" ] || continue
+            # shellcheck disable=SC2086
+            for f in "$ARTIFACTS_DIR"/$pattern; do
+              [ -f "$f" ] || continue
+              echo "$f" >> "$RUNNER_TEMP/release-files.txt"
+            done
+          done < "$RUNNER_TEMP/release-globs.txt"
+          sort -u "$RUNNER_TEMP/release-files.txt" -o "$RUNNER_TEMP/release-files.txt"
+          echo "Release assets:"
+          cat "$RUNNER_TEMP/release-files.txt"
+          # Hard requirements: without these the release is useless.
+          for required in UTM-VM-lineage-24 'lineage_virtio_arm64only-ota.zip' boot_arm64only.img; do
+            if ! grep -q "$required" "$RUNNER_TEMP/release-files.txt"; then
+              echo "::error::required artifact matching '$required' was not produced"
+              exit 1
+            fi
+          done
+          {
+            echo "files<<__EOF__"
+            cat "$RUNNER_TEMP/release-files.txt"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifacts (debug)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lineage-24.0-arm64only-${{ github.run_id }}
+          path: |
+            artifacts/*.img
+            artifacts/*.zip
+            artifacts/*.list
+            artifacts/dynamic_partitions_op_list
+            artifacts/BUILD-SUMMARY.md
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
 
       - name: Publish
         uses: softprops/action-gh-release@v3
@@ -56,29 +192,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: v${{ env.VERSION }}
           tag_name: v${{ env.VERSION }}
-          files: |
-            boot_arm64only.img
-            recovery_arm64only.img
-            recovery_arm64only-userdebug.img
-            android/lineage/out/target/product/virtio_arm64only/*ota.zip
-            android/lineage/out/target/product/virtio_arm64only/VirtualMachine/UTM/UTM-VM*.zip
-            boot_x86_64.img
-            recovery_x86_64.img
-            recovery_x86_64-userdebug.img
-            android/lineage/out/target/product/virtio_x86_64/*ota.zip
-            android/lineage/out/target/product/virtio_x86_64/VirtualMachine/UTM/UTM-VM*.zip
+          body_path: artifacts/BUILD-SUMMARY.md
+          files: ${{ steps.artifacts.outputs.files }}
 
       - name: Attest
         uses: actions/attest@v4
         with:
-          subject-path: |
-            boot_arm64only.img
-            recovery_arm64only.img
-            recovery_arm64only-userdebug.img
-            android/lineage/out/target/product/virtio_arm64only/*ota.zip
-            android/lineage/out/target/product/virtio_arm64only/VirtualMachine/UTM/UTM-VM*.zip
-            boot_x86_64.img
-            recovery_x86_64.img
-            recovery_x86_64-userdebug.img
-            android/lineage/out/target/product/virtio_x86_64/*ota.zip
-            android/lineage/out/target/product/virtio_x86_64/VirtualMachine/UTM/UTM-VM*.zip
+          subject-path: ${{ steps.artifacts.outputs.files }}

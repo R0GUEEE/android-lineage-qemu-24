@@ -1,22 +1,36 @@
-# LineageOS for QEMU Virtual Machines
+# LineageOS 24.0 for QEMU Virtual Machines (arm64 only)
 
-[![GitHub](https://img.shields.io/github/downloads/jqssun/android-lineage-qemu/total?label=GitHub&logo=GitHub)](https://github.com/jqssun/android-lineage-qemu/releases)
-[![license](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jqssun/android-lineage-qemu/blob/main/LICENSE)
-[![build](https://img.shields.io/github/actions/workflow/status/jqssun/android-lineage-qemu/build.yml)](https://github.com/jqssun/android-lineage-qemu/actions/workflows/build.yml)
+Fork of [jqssun/android-lineage-qemu](https://github.com/jqssun/android-lineage-qemu)
+retargeted at **LineageOS 24.0 (Android 17)** and reduced to the single
+`virtio_arm64only` target (build types `userdebug` + `user`), so the CI run is
+roughly half of upstream's.
 
-[LineageOS](https://lineageos.org/Changelog-32/) builds for running Android VM on 
-- [any macOS/iOS device (via UTM)](https://wiki.lineageos.org/utm-vm-on-apple-silicon-mac), or 
-- [generic libvirt QEMU virtual machines](https://wiki.lineageos.org/libvirt-qemu#create-and-configure-the-virtual-machine-using-virt-manager)
+Produced artifacts per run (`vYYYY.MM.DD` release):
 
-For the latest builds, see [Releases](https://github.com/jqssun/android-lineage-qemu/releases/latest).
+| file | contents |
+| --- | --- |
+| `UTM-VM-lineage-24*.zip` | UTM/UTM-VM bundle (`*.utm` = config.plist + vda/vdb qcow2 + efi_vars.fd) |
+| `lineage_virtio_arm64only-ota.zip` | recovery-flashable / `adb sideload` update package |
+| `boot_arm64only.img` | boot image (Magisk-patchable) |
+| `vendor_boot_arm64only.img` | vendor_boot image (recovery ramdisk lives here on non-A/B) |
+| `recovery_arm64only-userdebug.img` | unsigned recovery (bypasses signature verification) |
+| `recovery_arm64only.img` | user recovery |
+| `EFI.img` | GRUB 2.13 EFI System Partition image (contains `android_bootimg_fs` module) |
 
-<img alt="lineage" src="https://github.com/user-attachments/assets/442b5d82-1b32-4702-b3c1-70c6b033ee58" />
+GRUB is **not** pinned or downgraded: LineageOS 24.0 ships `external/grub` on
+branch `lineage-24.0`, which already contains `grub-core/fs/android_bootimg_fs.c`
+and registers the `android_bootimg_fs` module in `grub-core/Makefile.core.def`,
+together with the `initrd_no_align_up` directive used by `grub-boot.cfg`.
+
+Note: LineageOS 24.0 device trees default to a **16 KiB page-size** arm64 kernel
+(`TARGET_PREBUILT_KERNEL_USE`), so the 4 KiB variants (`*_16k` lunch targets) are
+not needed.
 
 ## Usage
 
-- For first time installs, download [`UTM-VM-lineage-*.zip`](https://github.com/jqssun/android-lineage-qemu/releases/latest) and unzip. For iPhone, iPad, Mac (Apple silicon), Windows on Arm, and ARM64 Linux, using the `arm64only` build is recommended. For Mac (Intel), Windows PC, x86_64 Linux, or specific cases where UTM is limited to JIT mode, use the `x86_64` build. To run via `qemu-system` directly, see [Development](#development).
+- For first time installs, download [`UTM-VM-lineage-*.zip`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest) and unzip. For iPhone, iPad, Mac (Apple silicon), Windows on Arm, and ARM64 Linux, using the `arm64only` build is recommended. For Mac (Intel), Windows PC, x86_64 Linux, or specific cases where UTM is limited to JIT mode, use the `x86_64` build. To run via `qemu-system` directly, see [Development](#development).
 
-- To install an update package, boot into **LineageOS Recovery**, select **Apply update**, then **Apply from ADB**. Use [`lineage_virtio_arm64only-ota.zip`](https://github.com/jqssun/android-lineage-qemu/releases/latest/download/lineage_virtio_arm64only-ota.zip) or [`lineage_virtio_x86_64-ota.zip`](https://github.com/jqssun/android-lineage-qemu/releases/latest/download/lineage_virtio_x86_64-ota.zip) from releases if updating to a new LineageOS build, or use your own update package. On the host, run
+- To install an update package, boot into **LineageOS Recovery**, select **Apply update**, then **Apply from ADB**. Use [`lineage_virtio_arm64only-ota.zip`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest/download/lineage_virtio_arm64only-ota.zip) or [`lineage_virtio_x86_64-ota.zip`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest/download/lineage_virtio_x86_64-ota.zip) from releases if updating to a new LineageOS build, or use your own update package. On the host, run
 ```shell
 adb sideload [*.zip]
 ```
@@ -61,7 +75,7 @@ If running `adb` on the same host, no further configuration is needed and the de
 
 ### Bypassing Signature Verification in Recovery
 
-[LineageOS Recovery supports sideloading unsigned update files.](https://review.lineageos.org/c/LineageOS/android_bootable_recovery/+/368223) To allow this, you need to install a non-release version of the recovery image. To put the virtual machine in `fastbootd`, boot into **LineageOS Recovery**, select **Advanced**, then **Enter fastboot**. On the host, download [`recovery_arm64only-userdebug.img`](https://github.com/jqssun/android-lineage-qemu/releases/latest/download/recovery_arm64only-userdebug.img) from releases and run
+[LineageOS Recovery supports sideloading unsigned update files.](https://review.lineageos.org/c/LineageOS/android_bootable_recovery/+/368223) To allow this, you need to install a non-release version of the recovery image. To put the virtual machine in `fastbootd`, boot into **LineageOS Recovery**, select **Advanced**, then **Enter fastboot**. On the host, download [`recovery_arm64only-userdebug.img`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest/download/recovery_arm64only-userdebug.img) from releases and run
 ```shell
 fastboot -s tcp:$HOST_IP flash recovery recovery_*-userdebug.img
 ```
@@ -85,22 +99,56 @@ adb -s $HOST_IP:5555 shell resize2fs /dev/block/mapper/product
 
 ### Installing Magisk
 
-To install [Magisk](https://github.com/topjohnwu/Magisk/releases/latest), download [`boot_arm64only.img`](https://github.com/jqssun/android-lineage-qemu/releases/latest/download/boot_arm64only.img) or [`boot_x86_64.img`](https://github.com/jqssun/android-lineage-qemu/releases/latest/download/boot_x86_64.img) from releases, and patch it on a running instance of this LineageOS build following the [instructions](https://topjohnwu.github.io/Magisk/install.html#patching-images). Pull the patched image `magisk_patched*.img` from the device, [put the device in `fastbootd`](#bypassing-signature-verification-in-recovery), then run
+To install [Magisk](https://github.com/topjohnwu/Magisk/releases/latest), download [`boot_arm64only.img`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest/download/boot_arm64only.img) or [`boot_x86_64.img`](https://github.com/R0GUEEE/android-lineage-qemu-24/releases/latest/download/boot_x86_64.img) from releases, and patch it on a running instance of this LineageOS build following the [instructions](https://topjohnwu.github.io/Magisk/install.html#patching-images). Pull the patched image `magisk_patched*.img` from the device, [put the device in `fastbootd`](#bypassing-signature-verification-in-recovery), then run
 ```shell
 fastboot -s tcp:$HOST_IP flash boot magisk_patched*.img
 ```
 
 ## Building
 
-All releases are built using [Actions](https://github.com/features/actions). Current releases can also be attested using [GitHub CLI](https://github.com/cli/cli).
+All releases are built using [Actions](https://github.com/features/actions).
+
+### Requirements: runner size
+
+A full arm64-only AOSP checkout + build needs **~150-250 GB of disk** (repo
+checkout ~90 GB, `out/` ~60-100 GB, ccache up to 50 GB) and **>= 16 GB RAM**
+(32 GB recommended). GitHub's standard hosted runner (`ubuntu-latest`) is
+**4 vCPU / 16 GB RAM / 14 GB SSD** and therefore **cannot** complete this build;
+its AOSP-friendly `/mnt` extras only add ~65 GB of *mounted* scratch, still far
+from enough for a single-checkout build. Upstream therefore defaults to
+`self-hosted`, and its published runs took ~3 h 07 min wall clock on a
+self-hosted machine building **both** x86_64 and arm64 twice.
+
+Use one of:
+
+* `runner: self-hosted` (default) -- your own machine with >= 200 GB free disk;
+* a GitHub-hosted **larger** runner (paid, private repos), e.g. a label from a
+  runner group with >= 100 GB storage and >= 16 cores.
+
+The `Runner resources` step prints CPU/RAM/disk and fails in seconds if the
+runner has < 100 GB free (override with `allow_small_runner: true`).
+
+### Dispatching
 
 ```shell
-gh attestation verify *.zip -R jqssun/android-lineage-qemu
+# self-hosted (default): ~60-90 min for arm64only userdebug+user (2x faster than upstream)
+gh workflow run build.yml -R R0GUEEE/android-lineage-qemu-24 \
+  -f runner=self-hosted -f sync_jobs=8
+
+# GitHub-hosted larger runner:
+gh workflow run build.yml -R R0GUEEE/android-lineage-qemu-24 \
+  -f runner=ubuntu-latest-32-cores -f sync_jobs=16
 ```
 
-This repository provides the build script to compile LineageOS on the latest Ubuntu, and assumes you already have root access via `sudo` with `apt` and `git` in your `$PATH`. It may also work with other Linux distributions, but these configurations are not tested.
+Watch it with `gh run watch -R R0GUEEE/android-lineage-qemu-24`.
 
-To build these images yourself via CI (e.g. GitHub Actions), fork this repository, then go to **Actions**, select **Build**, and select **Run workflow**. Under **Runner**, you can either use a GitHub-hosted runner by entering `ubuntu-latest`, or `self-hosted` for your own hardware.
+`build.sh` is also runnable locally (see below) and takes `LINEAGE_BRANCH`,
+`DEVICE`, `BUILD_TYPES`, `SYNC_JOBS`, `BUILD_JOBS`, `WORKDIR`, `ARTIFACTS_DIR`
+from the environment. All release files are copied into `artifacts/` explicitly,
+and the script fails if `UTM-VM-lineage-24*.zip`,
+`lineage_virtio_arm64only-ota.zip` or `boot_arm64only.img` are missing.
+
+This repository provides the build script to compile LineageOS on the latest Ubuntu, and assumes you already have root access via `sudo` with `apt` and `git` in your `$PATH`. It may also work with other Linux distributions, but these configurations are not tested.
 
 ## Development
 

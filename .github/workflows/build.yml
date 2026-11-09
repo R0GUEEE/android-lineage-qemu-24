@@ -29,8 +29,8 @@ on:
         required: false
         type: string
         default: "8"
-      lineage_branch:
-        description: "LineageOS manifest branch"
+      manifest_branch:
+        description: "LineageOS manifest branch (repo init -b)"
         required: false
         type: string
         default: "lineage-24.0"
@@ -59,7 +59,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  lint:
+    # Cheap sanity gate (seconds, not hours): shell syntax, YAML structure,
+    # artifact-collection logic. Runs before anything expensive is scheduled.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate scripts and workflow
+        run: |
+          chmod +x ./*.sh
+          ./ci-test.sh
+
   check:
+    needs: lint
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.check.outputs.build }}
@@ -75,7 +87,7 @@ jobs:
           fi
 
   build:
-    needs: check
+    needs: [lint, check]
     if: needs.check.outputs.build == 'true'
     # workflow_dispatch: use the `runner` input; schedule: self-hosted (upstream default).
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'self-hosted' }}
@@ -120,7 +132,7 @@ jobs:
       - name: Build (lineage-24.0, virtio_arm64only)
         env:
           DEBIAN_FRONTEND: noninteractive
-          LINEAGE_BRANCH: ${{ inputs.lineage_branch || 'lineage-24.0' }}
+          LINEAGE_BRANCH: ${{ inputs.manifest_branch || 'lineage-24.0' }}
           SYNC_JOBS: ${{ inputs.sync_jobs || '8' }}
           BUILD_TYPES: ${{ inputs.build_types || 'userdebug user' }}
           DEVICE: virtio_arm64only
